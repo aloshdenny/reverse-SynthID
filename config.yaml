@@ -1,0 +1,58 @@
+# Reverse SynthID Configuration File
+
+# Image processing settings
+image:
+  target_size: 512
+  resize_interpolation: "bilinear"  # bilinear, bicubic, lanczos
+  
+# Wavelet denoising parameters
+wavelet:
+  type: "db4"
+  level: 3
+  threshold_mode: "soft"
+
+# SynthID detection thresholds
+detection:
+  correlation_threshold: 0.179
+  phase_match_threshold: 0.5
+  structure_ratio_min: 0.8
+  structure_ratio_max: 1.8
+  expected_structure_ratio: 1.32
+  
+  # Confidence weights
+  correlation_weight: 0.4
+  phase_weight: 0.4
+  structure_weight: 0.2
+
+# Watermark analysis thresholds
+watermark_analysis:
+  frequency_diff_threshold: 0.5
+  color_shift_threshold: 1.0
+  lsb_deviation_threshold: 0.02
+  phash_min_distance: 5
+  phash_max_distance: 30
+
+# Processing settings
+processing:
+  max_workers: 8  # For parallel processing
+  batch_size: 100
+  progress_bar: true
+  
+# Codebook extraction
+codebook:
+  max_images: 250
+  top_carriers: 100
+  phase_coherence_percentile: 99.5
+
+# Paths (override with command-line arguments or environment variables)
+paths:
+  data_dir: "data/"
+  artifacts_dir: "artifacts/"
+  output_dir: "output/"
+  codebook_file: "artifacts/codebook/synthid_codebook.pkl"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/reverse_synthid.log"

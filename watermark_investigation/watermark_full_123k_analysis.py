@@ -11,97 +11,217 @@ import cv2
 from collections import defaultdict
 import time
 import sys
+import argparse
+import logging
+from pathlib import Path
 
-BASE_PATH = "/Users/aloshdenny/Downloads"
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-def load_image(path):
-    """Load image safely."""
-    full_path = os.path.join(BASE_PATH, path)
-    if os.path.exists(full_path):
-        return cv2.imread(full_path)
-    return None
 
-def analyze_lsb(img):
-    """Quick LSB analysis."""
-    if img is None:
+def load_image(path: str, base_path: str = None) -> np.ndarray:
+    """
+    Load image safely with error handling.
+    
+    Args:
+        path: Relative or absolute image path
+        base_path: Base directory to prepend if path is relative
+    
+    Returns:
+        Loaded image as numpy array or None if failed
+    """
+    if base_path and not os.path.isabs(path):
+        full_path = os.path.join(base_path, path)
+    else:
+        full_path = path
+    
+    if not os.path.exists(full_path):
+        logger.debug(f"Image not found: {full_path}")
         return None
-    results = {}
-    for i, ch in enumerate(['B', 'G', 'R']):
-        lsb_mean = np.mean(img[:, :, i] & 1)
-        results[f'{ch}_lsb'] = float(lsb_mean)
-    return results
+    
+    try:
+        img = cv2.imread(full_path)
+        if img is None:
+            logger.debug(f"Failed to decode image: {full_path}")
+        return img
+    except Exception as e:
+        logger.debug(f"Error loading {full_path}: {e}")
+        return None
 
-def analyze_frequency(img1, img2):
-    """Quick frequency domain analysis."""
+def analyze_lsb(img: np.ndarray) -> dict:
+    """
+    Quick LSB analysis on image channels.
+    
+    Args:
+        img: Input image (BGR format)
+    
+    Returns:
+        Dictionary with LSB statistics per channel or None if failed
+    """
+    if img is None or img.size == 0:
+        return None
+    
+    try:
+        results = {}
+        for i, ch in enumerate(['B', 'G', 'R']):
+            lsb_mean = np.mean(img[:, :, i] & 1)
+            results[f'{ch}_lsb'] = float(lsb_mean)
+        return results
+    except Exception as e:
+        logger.debug(f"LSB analysis failed: {e}")
+        return None
+
+def analyze_frequency(img1: np.ndarray, img2: np.ndarray) -> dict:
+    """
+    Quick frequency domain analysis comparing two images.
+    
+    Args:
+        img1: First image
+        img2: Second image
+    
+    Returns:
+        Dictionary with frequency difference statistics or None if failed
+    """
     if img1 is None or img2 is None:
         return None
     
-    if img1.shape != img2.shape:
-        img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
-    
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY).astype(float)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY).astype(float)
-    
-    f1 = np.fft.fft2(gray1)
-    f2 = np.fft.fft2(gray2)
-    
-    mag1 = np.log(np.abs(np.fft.fftshift(f1)) + 1)
-    mag2 = np.log(np.abs(np.fft.fftshift(f2)) + 1)
-    
-    diff = np.abs(mag2 - mag1)
-    return {
-        'freq_diff_mean': float(np.mean(diff)),
-        'freq_diff_max': float(np.max(diff))
-    }
+    try:
+        if img1.shape != img2.shape:
+            img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY).astype(float)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY).astype(float)
+        
+        f1 = np.fft.fft2(gray1)
+        f2 = np.fft.fft2(gray2)
+        
+        mag1 = np.log(np.abs(np.fft.fftshift(f1)) + 1)
+        mag2 = np.log(np.abs(np.fft.fftshift(f2)) + 1)
+        
+        diff = np.abs(mag2 - mag1)
+        return {
+            'freq_diff_mean': float(np.mean(diff)),
+            'freq_diff_max': float(np.max(diff))
+        }
+    except Exception as e:
+        logger.debug(f"Frequency analysis failed: {e}")
+        return None
 
-def analyze_color_shift(img1, img2):
-    """Analyze color shifts."""
+def analyze_color_shift(img1: np.ndarray, img2: np.ndarray) -> dict:
+    """
+    Analyze color shifts between two images.
+    
+    Args:
+        img1: First image
+        img2: Second image
+    
+    Returns:
+        Dictionary with color shift per channel or None if failed
+    """
     if img1 is None or img2 is None:
         return None
     
-    if img1.shape != img2.shape:
-        img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
-    
-    diff = img2.astype(float) - img1.astype(float)
-    return {
-        'R_shift': float(np.mean(diff[:, :, 2])),
-        'G_shift': float(np.mean(diff[:, :, 1])),
-        'B_shift': float(np.mean(diff[:, :, 0]))
-    }
+    try:
+        if img1.shape != img2.shape:
+            img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        
+        diff = img2.astype(float) - img1.astype(float)
+        return {
+            'R_shift': float(np.mean(diff[:, :, 2])),
+            'G_shift': float(np.mean(diff[:, :, 1])),
+            'B_shift': float(np.mean(diff[:, :, 0]))
+        }
+    except Exception as e:
+        logger.debug(f"Color shift analysis failed: {e}")
+        return None
 
-def compute_phash_distance(img1, img2):
-    """Compute perceptual hash distance."""
+def compute_phash_distance(img1: np.ndarray, img2: np.ndarray) -> int:
+    """
+    Compute perceptual hash distance between two images.
+    
+    Args:
+        img1: First image
+        img2: Second image
+    
+    Returns:
+        Hamming distance between perceptual hashes or None if failed
+    """
     if img1 is None or img2 is None:
         return None
     
-    if img1.shape != img2.shape:
-        img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
-    
-    def phash(img, size=32):
-        resized = cv2.resize(img, (size, size))
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY).astype(float)
-        dct = cv2.dct(gray)
-        dct_low = dct[:8, :8]
-        median = np.median(dct_low)
-        return (dct_low > median).flatten()
-    
-    h1, h2 = phash(img1), phash(img2)
-    return int(np.sum(h1 != h2))
+    try:
+        if img1.shape != img2.shape:
+            img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        
+        def phash(img, size=32):
+            resized = cv2.resize(img, (size, size))
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY).astype(float)
+            dct = cv2.dct(gray)
+            dct_low = dct[:8, :8]
+            median = np.median(dct_low)
+            return (dct_low > median).flatten()
+        
+        h1, h2 = phash(img1), phash(img2)
+        return int(np.sum(h1 != h2))
+    except Exception as e:
+        logger.debug(f"Phash computation failed: {e}")
+        return None
 
 def main():
+    """Main analysis function."""
+    parser = argparse.ArgumentParser(
+        description='Comprehensive Watermark Analysis on Image Pairs',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('pairs_file', type=str, help='Path to pairs.jsonl file')
+    parser.add_argument('--base-path', type=str, help='Base path for image files (optional)')
+    parser.add_argument('--output', type=str, default='watermark_results.json',
+                       help='Output JSON file (default: watermark_results.json)')
+    parser.add_argument('--max-pairs', type=int, help='Limit number of pairs to process')
+    parser.add_argument('--log-level', type=str, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Logging level')
+    
+    args = parser.parse_args()
+    
+    # Set log level
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    
     print("=" * 80)
-    print("COMPREHENSIVE WATERMARK ANALYSIS - ALL 123,268 PAIRS")
+    print("COMPREHENSIVE WATERMARK ANALYSIS")
     print("=" * 80)
+    
+    # Validate inputs
+    if not os.path.exists(args.pairs_file):
+        logger.error(f"Pairs file not found: {args.pairs_file}")
+        sys.exit(1)
     
     # Load all pairs
-    print("\nLoading all pairs...")
+    logger.info(f"Loading pairs from {args.pairs_file}...")
     pairs = []
-    with open('/Users/aloshdenny/vscode/pairs.jsonl', 'r') as f:
-        for line in f:
-            pairs.append(json.loads(line))
+    try:
+        with open(args.pairs_file, 'r') as f:
+            for line in f:
+                if line.strip():
+                    pairs.append(json.loads(line))
+    except Exception as e:
+        logger.error(f"Failed to load pairs file: {e}")
+        sys.exit(1)
+    
+    if not pairs:
+        logger.error("No pairs found in file")
+        sys.exit(1)
+    
+    # Limit pairs if specified
+    if args.max_pairs:
+        pairs = pairs[:args.max_pairs]
+        logger.info(f"Limited to {args.max_pairs} pairs")
     
     total_pairs = len(pairs)
-    print(f"Total pairs to process: {total_pairs}")
+    logger.info(f"Total pairs to process: {total_pairs:,}")
     
     # Statistics accumulators
     stats = {
@@ -122,15 +242,20 @@ def main():
     print("-" * 80)
     
     for idx, pair in enumerate(pairs):
-        input_path = pair['input_images'][0]
-        output_path = pair['output_images'][0]
+        try:
+            input_path = pair['input_images'][0]
+            output_path = pair['output_images'][0]
+        except (KeyError, IndexError) as e:
+            logger.warning(f"Malformed pair at index {idx}: {e}")
+            stats['failed'] += 1
+            continue
         
         # Extract category
         parts = output_path.split('/')
         category = parts[3] if len(parts) > 3 else 'unknown'
         
-        original = load_image(input_path)
-        edited = load_image(output_path)
+        original = load_image(input_path, args.base_path)
+        edited = load_image(output_path, args.base_path)
         
         if original is None or edited is None:
             stats['failed'] += 1
@@ -304,7 +429,6 @@ def main():
 """)
     
     # Save results
-    output_file = '/Users/aloshdenny/vscode/watermark_FULL_123k_results.json'
     summary = {
         'total_pairs': total_pairs,
         'processed': stats['processed'],
@@ -330,10 +454,20 @@ def main():
         'watermark_indicator_distribution': dict(stats['watermark_indicators'])
     }
     
-    with open(output_file, 'w') as f:
-        json.dump(summary, f, indent=2)
-    
-    print(f"Results saved to: {output_file}")
+    try:
+        # Create output directory if needed
+        output_dir = os.path.dirname(args.output)
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
+        with open(args.output, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        logger.info(f"Results saved to: {args.output}")
+        print(f"\nResults saved to: {args.output}")
+    except Exception as e:
+        logger.error(f"Failed to save results: {e}")
+        print(f"Warning: Failed to save results to {args.output}: {e}")
 
 if __name__ == "__main__":
     main()

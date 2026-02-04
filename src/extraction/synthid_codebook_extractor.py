@@ -17,51 +17,158 @@ The codebook consists of:
 """
 
 import os
+import sys
 import numpy as np
 import cv2
 from scipy.fft import fft2, fftshift
 import pywt
 import json
 import pickle
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+
+from src.utils import load_config, setup_logging, validate_image, validate_codebook, secure_pickle_load
+
+logger = logging.getLogger('reverse_synthid.extraction')
 
 
-def wavelet_denoise(channel, wavelet='db4', level=3):
-    """Wavelet-based denoising."""
-    coeffs = pywt.wavedec2(channel, wavelet, level=level)
-    detail = coeffs[-1][0]
-    sigma = np.median(np.abs(detail)) / 0.6745
-    threshold = sigma * np.sqrt(2 * np.log(channel.size))
+def wavelet_denoise(
+    channel: np.ndarray,
+    wavelet: str = 'db4',
+    level: int = 3
+) -> np.ndarray:
+    """
+    Wavelet-based denoising using soft thresholding.
     
-    new_coeffs = [coeffs[0]]
-    for details in coeffs[1:]:
-        new_details = tuple(pywt.threshold(d, threshold, mode='soft') for d in details)
-        new_coeffs.append(new_details)
+    Args:
+        channel: 2D array representing a single image channel
+        wavelet: Wavelet type (default: 'db4')
+        level: Decomposition level (default: 3)
     
-    denoised = pywt.waverec2(new_coeffs, wavelet)
-    return denoised[:channel.shape[0], :channel.shape[1]]
+    Returns:
+        Denoised channel as 2D array
+    
+    Raises:
+        ValueError: If channel is invalid or empty
+    """
+    if channel.size == 0:
+        raise ValueError("Cannot denoise empty channel")
+    
+    if channel.ndim != 2:
+        raise ValueError(f"Channel must be 2D, got {channel.ndim}D")
+    
+    try:
+        # Decompose
+        coeffs = pywt.wavedec2(channel, wavelet, level=level)
+        
+        # Estimate noise level from finest detail coefficients
+        detail = coeffs[-1][0]
+        sigma = np.median(np.abs(detail)) / 0.6745
+        threshold = sigma * np.sqrt(2 * np.log(channel.size))
+        
+        # Apply threshold to detail coefficients
+        new_coeffs = [coeffs[0]]
+        for details in coeffs[1:]:
+            new_details = tuple(pywt.threshold(d, threshold, mode='soft') for d in details)
+            new_coeffs.append(new_details)
+        
+        # Reconstruct
+        denoised = pywt.waverec2(new_coeffs, wavelet)
+        
+        # Handle shape mismatch (fix bug)
+        if denoised.shape != channel.shape:
+            # Crop if larger
+            if denoised.shape[0] >= channel.shape[0] and denoised.shape[1] >= channel.shape[1]:
+                denoised = denoised[:channel.shape[0], :channel.shape[1]]
+            # Pad if smaller
+            else:
+                padded = np.zeros(channel.shape, dtype=denoised.dtype)
+                padded[:denoised.shape[0], :denoised.shape[1]] = denoised
+                denoised = padded
+        
+        return denoised
+    
+    except Exception as e:
+        logger.error(f"Wavelet denoising failed: {e}")
+        raise ValueError(f"Wavelet denoising error: {e}")
 
 
-def extract_codebook(image_dir, output_path, max_images=250, size=512):
-    """Extract SynthID codebook from a collection of watermarked images."""
+def extract_codebook(
+    image_dir: str,
+    output_path: str,
+    max_images: int = 250,
+    size: int = 512
+) -> Dict[str, Any]:
+    """
+    Extract SynthID codebook from a collection of watermarked images.
     
-    print(f"Loading images from {image_dir}...")
+    Args:
+        image_dir: Directory containing watermarked images
+        output_path: Path to save codebook pickle file
+        max_images: Maximum number of images to analyze
+        size: Target image size (will resize to size×size)
     
-    # Load images
+    Returns:
+        Extracted codebook dictionary
+    
+    Raises:
+        FileNotFoundError: If image directory doesn't exist
+        ValueError: If no valid images found or max_images < 10
+    """
+    if not os.path.isdir(image_dir):
+        raise FileNotFoundError(f"Image directory not found: {image_dir}")
+    
+    if max_images < 10:
+        raise ValueError(f"max_images must be at least 10, got {max_images}")
+    
+    logger.info(f"Loading images from {image_dir}...")
+    
+    # Load images with validation
     extensions = {'.png', '.jpg', '.jpeg', '.webp'}
     images = []
+    failed_count = 0
     
     for fname in sorted(os.listdir(image_dir)):
-        if os.path.splitext(fname)[1].lower() in extensions:
-            path = os.path.join(image_dir, fname)
+        if len(images) >= max_images:
+            break
+        
+        if os.path.splitext(fname)[1].lower() not in extensions:
+            continue
+        
+        path = os.path.join(image_dir, fname)
+        
+        try:
+            # Validate before loading
+            validate_image(path)
+            
             img = cv2.imread(path)
-            if img is not None:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, (size, size))
-                images.append(img)
-                if len(images) >= max_images:
-                    break
+            if img is None:
+                logger.warning(f"Failed to load: {fname}")
+                failed_count += 1
+                continue
+            
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
+            images.append(img)
+            
+        except Exception as e:
+            logger.warning(f"Skipping {fname}: {e}")
+            failed_count += 1
+            continue
     
-    print(f"Loaded {len(images)} images")
+    if len(images) == 0:
+        raise ValueError(f"No valid images found in {image_dir}")
+    
+    if len(images) < 10:
+        raise ValueError(
+            f"Too few images loaded ({len(images)}). Need at least 10 for reliable codebook."
+        )
+    
+    logger.info(f"Loaded {len(images)} images ({failed_count} failed)")
     images = np.array(images)
     
     # ================================================================
@@ -229,25 +336,53 @@ def extract_codebook(image_dir, output_path, max_images=250, size=512):
     return codebook
 
 
-def detect_synthid(image_path, codebook_path):
+def detect_synthid(
+    image_path: str,
+    codebook_path: str
+) -> Dict[str, Any]:
     """
     Detect SynthID watermark in an image using the extracted codebook.
     
+    Args:
+        image_path: Path to image to check
+        codebook_path: Path to codebook pickle file
+    
     Returns:
-        dict with detection results
+        Dictionary with detection results:
+        - is_watermarked: bool
+        - confidence: float (0-1)
+        - correlation: float
+        - phase_match: float (0-1)
+        - structure_ratio: float
+        - threshold: float
+        - reference_correlation_mean: float
+    
+    Raises:
+        FileNotFoundError: If image or codebook not found
+        ValueError: If image or codebook is invalid
     """
-    # Load codebook
-    with open(codebook_path, 'rb') as f:
-        codebook = pickle.load(f)
+    # Validate and load codebook securely
+    try:
+        codebook = secure_pickle_load(codebook_path)
+        validate_codebook(codebook)
+    except Exception as e:
+        logger.error(f"Failed to load codebook: {e}")
+        raise ValueError(f"Invalid codebook: {e}")
     
-    # Load and preprocess image
-    img = cv2.imread(image_path)
-    if img is None:
-        return {'error': 'Could not load image'}
+    # Validate and load image
+    try:
+        validate_image(image_path)
+        img = cv2.imread(image_path)
+        if img is None:
+            raise ValueError(f"Failed to load image: {image_path}")
+    except Exception as e:
+        logger.error(f"Failed to load image: {e}")
+        raise
     
+    # Preprocess image
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     size = codebook['image_size']
-    img = cv2.resize(img, (size, size))
+    img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
     img_f = img.astype(np.float32) / 255.0
     
     # Extract noise pattern
@@ -283,21 +418,40 @@ def detect_synthid(image_path, codebook_path):
     
     # Method 3: Noise structure ratio
     noise_gray = np.mean(noise, axis=2)
-    structure_ratio = float(np.std(noise_gray) / (np.mean(np.abs(noise_gray)) + 1e-10))
+    noise_mean = np.mean(np.abs(noise_gray))
+    
+    # Prevent division by zero
+    if noise_mean < 1e-10:
+        structure_ratio = 1.0
+        logger.warning("Noise mean too small, defaulting structure_ratio to 1.0")
+    else:
+        structure_ratio = float(np.std(noise_gray) / noise_mean)
     
     # Detection decision
     threshold = codebook['detection_threshold']
+    phase_threshold = codebook.get('phase_match_threshold', 0.5)
+    
     is_watermarked = (
         correlation > threshold and
-        avg_phase_match > 0.5 and
+        avg_phase_match > phase_threshold and
         0.8 < structure_ratio < 1.8
     )
     
-    # Confidence score
+    # Confidence score (fixed to handle edge cases)
+    correlation_component = 0.0
+    if codebook['correlation_mean'] > threshold:
+        correlation_component = max(0.0, min(1.0,
+            (correlation - threshold) / (codebook['correlation_mean'] - threshold)
+        )) * 0.4
+    
+    phase_component = avg_phase_match * 0.4
+    
+    # Structure component (handle deviations gracefully)
+    structure_deviation = abs(structure_ratio - 1.32)
+    structure_component = max(0.0, 1.0 - min(1.0, structure_deviation / 0.5)) * 0.2
+    
     confidence = min(1.0, max(0.0, 
-        (correlation - threshold) / (codebook['correlation_mean'] - threshold) * 0.4 +
-        avg_phase_match * 0.4 +
-        (1 - abs(structure_ratio - 1.32) / 0.5) * 0.2
+        correlation_component + phase_component + structure_component
     ))
     
     return {
@@ -314,32 +468,116 @@ def detect_synthid(image_path, codebook_path):
 if __name__ == '__main__':
     import argparse
     
-    parser = argparse.ArgumentParser(description='SynthID Codebook Extractor and Detector')
+    parser = argparse.ArgumentParser(
+        description='SynthID Codebook Extractor and Detector',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Extract codebook from images
+  %(prog)s extract /path/to/images --output codebook.pkl --max-images 250
+  
+  # Detect watermark in single image
+  %(prog)s detect image.png --codebook codebook.pkl
+  
+  # Batch detect with custom config
+  %(prog)s detect /path/to/images/ --batch --config config.yaml
+"""
+    )
+    
+    parser.add_argument('--config', type=str, help='Path to config file')
+    parser.add_argument('--log-level', type=str, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Logging level')
+    parser.add_argument('--log-file', type=str, help='Log file path')
+    
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
     # Extract command
     extract_parser = subparsers.add_parser('extract', help='Extract codebook from images')
     extract_parser.add_argument('image_dir', type=str, help='Directory with watermarked images')
-    extract_parser.add_argument('--output', type=str, default='./synthid_codebook.pkl', help='Output path')
-    extract_parser.add_argument('--max-images', type=int, default=250, help='Max images')
-    extract_parser.add_argument('--size', type=int, default=512, help='Image size')
+    extract_parser.add_argument('--output', type=str, default='./synthid_codebook.pkl', 
+                               help='Output path (default: ./synthid_codebook.pkl)')
+    extract_parser.add_argument('--max-images', type=int, default=250, 
+                               help='Max images to analyze (default: 250)')
+    extract_parser.add_argument('--size', type=int, default=512, 
+                               help='Target image size (default: 512)')
     
     # Detect command
-    detect_parser = subparsers.add_parser('detect', help='Detect watermark in image')
-    detect_parser.add_argument('image', type=str, help='Image to check')
-    detect_parser.add_argument('--codebook', type=str, default='./synthid_codebook.pkl', help='Codebook path')
+    detect_parser = subparsers.add_parser('detect', help='Detect watermark in image(s)')
+    detect_parser.add_argument('image', type=str, help='Image file or directory to check')
+    detect_parser.add_argument('--codebook', type=str, default='./synthid_codebook.pkl', 
+                              help='Codebook path (default: ./synthid_codebook.pkl)')
+    detect_parser.add_argument('--batch', action='store_true', 
+                              help='Process directory in batch mode')
+    detect_parser.add_argument('--output', type=str, help='Output file for batch results (JSON)')
     
     args = parser.parse_args()
     
-    if args.command == 'extract':
-        extract_codebook(args.image_dir, args.output, args.max_images, args.size)
-    elif args.command == 'detect':
-        result = detect_synthid(args.image, args.codebook)
-        print("\nDetection Results:")
-        print(f"  Watermarked: {result['is_watermarked']}")
-        print(f"  Confidence: {result['confidence']:.4f}")
-        print(f"  Correlation: {result['correlation']:.4f}")
-        print(f"  Phase Match: {result['phase_match']:.4f}")
-        print(f"  Structure Ratio: {result['structure_ratio']:.4f}")
-    else:
-        parser.print_help()
+    # Setup logging
+    try:
+        if args.config:
+            config = load_config(args.config)
+        else:
+            config = load_config()
+    except FileNotFoundError:
+        config = None
+        logger.warning("No config file found, using defaults")
+    
+    setup_logging(level=args.log_level, log_file=args.log_file)
+    
+    try:
+        if args.command == 'extract':
+            logger.info("Starting codebook extraction...")
+            codebook = extract_codebook(args.image_dir, args.output, args.max_images, args.size)
+            logger.info(f"Codebook extraction complete: {args.output}")
+            
+        elif args.command == 'detect':
+            if args.batch and os.path.isdir(args.image):
+                # Batch detection
+                logger.info(f"Batch detection on directory: {args.image}")
+                results = []
+                
+                for fname in sorted(os.listdir(args.image)):
+                    if os.path.splitext(fname)[1].lower() in {'.png', '.jpg', '.jpeg', '.webp'}:
+                        path = os.path.join(args.image, fname)
+                        try:
+                            result = detect_synthid(path, args.codebook)
+                            result['filename'] = fname
+                            results.append(result)
+                            print(f"✓ {fname}: {'WATERMARKED' if result['is_watermarked'] else 'CLEAN'} "
+                                  f"(confidence: {result['confidence']:.3f})")
+                        except Exception as e:
+                            logger.error(f"Failed to process {fname}: {e}")
+                            results.append({'filename': fname, 'error': str(e)})
+                
+                # Save results if output specified
+                if args.output:
+                    with open(args.output, 'w') as f:
+                        json.dump(results, f, indent=2)
+                    logger.info(f"Batch results saved to {args.output}")
+                
+                # Summary
+                watermarked = sum(1 for r in results if r.get('is_watermarked', False))
+                print(f"\nSummary: {watermarked}/{len(results)} images watermarked")
+                
+            else:
+                # Single image detection
+                result = detect_synthid(args.image, args.codebook)
+                
+                print("\n" + "="*60)
+                print("SynthID Watermark Detection Results")
+                print("="*60)
+                print(f"Image:            {args.image}")
+                print(f"Watermarked:      {'YES' if result['is_watermarked'] else 'NO'}")
+                print(f"Confidence:       {result['confidence']:.4f}")
+                print(f"Correlation:      {result['correlation']:.4f} (threshold: {result['threshold']:.4f})")
+                print(f"Phase Match:      {result['phase_match']:.4f}")
+                print(f"Structure Ratio:  {result['structure_ratio']:.4f} (expected: ~1.32)")
+                print("="*60)
+                
+        else:
+            parser.print_help()
+    
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        print(f"Error: {e}")
+        sys.exit(1)

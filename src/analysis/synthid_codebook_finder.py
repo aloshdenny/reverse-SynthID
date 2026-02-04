@@ -602,6 +602,14 @@ def save_visualization(codebook: dict, output_dir: str):
     print(f"Visualizations saved to {output_dir}")
 
 
+def process_image_wrapper(args_tuple):
+    """Wrapper for parallel processing."""
+    path, target_size = args_tuple
+    finder = SynthIDCodebookFinder(target_size=target_size)
+    features = finder.analyze_image(path)
+    return path, features
+
+
 def main():
     import argparse
     
@@ -610,6 +618,8 @@ def main():
     parser.add_argument('--output', type=str, default='./codebook_results', help='Output directory')
     parser.add_argument('--max-images', type=int, default=250, help='Maximum images to analyze')
     parser.add_argument('--size', type=int, default=512, help='Target image size')
+    parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers')
+    parser.add_argument('--no-parallel', action='store_true', help='Disable parallel processing')
     
     args = parser.parse_args()
     
@@ -627,9 +637,60 @@ def main():
     image_paths = image_paths[:args.max_images]
     print(f"Found {len(image_paths)} images to analyze")
     
-    # Process images
-    for path in tqdm(image_paths, desc="Processing images"):
-        finder.add_image(path)
+    # Process images (with optional parallel processing)
+    if args.no_parallel or len(image_paths) < 10:
+        # Sequential processing
+        for path in tqdm(image_paths, desc="Processing images"):
+            finder.add_image(path)
+    else:
+        # Parallel processing
+        print(f"Processing with {args.workers} workers...")
+        from multiprocessing import cpu_count
+        n_workers = min(args.workers, cpu_count(), len(image_paths))
+        
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            # Process images in parallel
+            tasks = [(path, (args.size, args.size)) for path in image_paths]
+            results = list(tqdm(
+                executor.map(process_image_wrapper, tasks),
+                total=len(tasks),
+                desc="Processing images"
+            ))
+        
+        # Aggregate results
+        print("Aggregating results...")
+        for path, features in results:
+            if features is not None:
+                # Add to finder's accumulators
+                finder.lsb_patterns.append(features['lsb'])
+                finder.noise_patterns.append(features['noise'])
+                finder.fourier_magnitudes.append(features['fourier_mag'])
+                finder.fourier_phases.append(features['fourier_phase'])
+                finder.dct_patterns.append(features['dct'])
+                
+                for bit, plane in features['bit_planes'].items():
+                    finder.bit_planes[bit].append(plane)
+                
+                # Update running averages
+                if finder.lsb_avg is None:
+                    finder.lsb_avg = features['lsb'].astype(np.float64)
+                    finder.noise_avg = features['noise'].astype(np.float64)
+                    finder.fourier_avg = features['fourier_mag'].astype(np.float64)
+                    finder.phase_coherence = np.exp(1j * features['fourier_phase'])
+                else:
+                    finder.lsb_avg += features['lsb'].astype(np.float64)
+                    finder.noise_avg += features['noise'].astype(np.float64)
+                    finder.fourier_avg += features['fourier_mag'].astype(np.float64)
+                    finder.phase_coherence += np.exp(1j * features['fourier_phase'])
+                
+                finder.image_features.append({
+                    'lsb_density': features['lsb_density'],
+                    'noise_std': features['noise_std'],
+                    'noise_structure': features['noise_structure'],
+                    'bit_plane_densities': features['bit_plane_densities']
+                })
+                finder.image_paths.append(path)
+                finder.n_images += 1
     
     # Extract codebook
     codebook = finder.extract_codebook()

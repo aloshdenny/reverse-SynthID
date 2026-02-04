@@ -173,41 +173,63 @@ SynthID uses **spread-spectrum phase encoding** in the frequency domain—not LS
 
 ```
 reverse-SynthID/
-├── 📄 README.md                    # This file
-├── 📋 requirements.txt             # Python dependencies
-│
-├── 🔍 watermark_investigation/     # Nano-150k Analysis (NEW)
-│   ├── WATERMARK_EXTRACTED.png           # Final extracted watermark
-│   ├── WATERMARK_FINAL_ANALYSIS.png      # Comprehensive visualization
-│   ├── WATERMARK_enhanced_difference.png # Enhanced pattern
-│   ├── WATERMARK_frequency_spectrum.png  # Frequency domain
-│   ├── WATERMARK_signed_pattern.png      # Signed watermark
-│   ├── watermark_FULL_123k_results.json  # Complete results
-│   ├── watermark_evidence/               # Visual evidence
-│   └── *.py                              # Analysis scripts
+├── 📄 README.md                    # Project overview
+├── 📋 requirements.txt             # Python dependencies (pinned versions)
+├── ⚙️ config.yaml                  # Configuration file
+├── 📖 INSTALLATION.md              # Detailed installation guide
+├── 📝 CHANGELOG.md                 # Version history
+├── 🤝 CONTRIBUTING.md              # Contribution guidelines
 │
 ├── 💻 src/
 │   ├── analysis/
-│   │   ├── synthid_codebook_finder.py    # Pattern discovery
+│   │   ├── synthid_codebook_finder.py    # Pattern discovery (with parallel processing)
 │   │   └── deep_synthid_analysis.py      # Frequency analysis
-│   └── extraction/
-│       └── synthid_codebook_extractor.py # Codebook extraction & detection
+│   ├── extraction/
+│   │   └── synthid_codebook_extractor.py # Codebook extraction & detection (enhanced)
+│   └── utils/                            # NEW: Utility modules
+│       ├── __init__.py
+│       ├── config.py                     # Configuration management
+│       ├── logging_utils.py              # Logging setup
+│       └── validation.py                 # Input validation & security
+│
+├── 🧪 tests/                             # NEW: Unit tests
+│   ├── __init__.py
+│   ├── test_utils.py                     # Tests for utilities
+│   ├── test_extraction.py                # Tests for extraction
+│   └── test_analysis.py                  # Tests for analysis
+│
+├── 🔍 watermark_investigation/           # Nano-150k Analysis
+│   ├── WATERMARK_EXTRACTED.png
+│   ├── WATERMARK_FINAL_ANALYSIS.png
+│   ├── watermark_FULL_123k_results.json
+│   ├── watermark_evidence/
+│   └── *.py                              # Analysis scripts (improved CLI)
 │
 ├── 🎯 artifacts/
 │   ├── codebook/
 │   │   ├── synthid_codebook.pkl          # Extracted codebook (9 MB)
-│   │   └── synthid_codebook_meta.json    # Carrier frequencies
-│   └── visualizations/                   # Watermark images
-│
-├── 📂 data/
-│   └── pure_white/                       # 250 Gemini AI images
-│
-├── 📚 docs/
-│   └── SYNTHID_CODEBOOK_ANALYSIS.md      # Technical documentation
+│   │   └── synthid_codebook_meta.json
+│   └── visualizations/
 │
 └── 🖼️ assets/
-    └── synthid-watermark.jpeg            # Cover image
+    └── synthid-watermark.jpeg
 ```
+
+## 🆕 Recent Improvements
+
+### Version 2.0 (2026-02-04)
+
+- ✅ **Configuration System**: Centralized settings in `config.yaml`
+- ✅ **Secure Loading**: Protected pickle deserialization
+- ✅ **Parallel Processing**: 4-8x speedup for large datasets
+- ✅ **Batch Detection**: Process entire directories at once
+- ✅ **Input Validation**: Comprehensive error checking
+- ✅ **Unit Tests**: 25+ tests with pytest
+- ✅ **Better CLI**: Enhanced command-line interface
+- ✅ **Bug Fixes**: Resolved wavelet denoising and confidence calculation issues
+- ✅ **Documentation**: Installation guide, changelog, contributing guidelines
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## 🚀 Quick Start
 
@@ -218,55 +240,105 @@ git clone https://github.com/yourusername/reverse-SynthID.git
 cd reverse-SynthID
 
 # Create virtual environment
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Verify installation
+pytest
+```
+
+**Detailed installation instructions**: See [INSTALLATION.md](INSTALLATION.md)
+
+### Configuration
+
+The project uses `config.yaml` for settings. You can override with environment variables:
+
+```bash
+export SYNTHID_DATA_DIR=/path/to/data
+export SYNTHID_OUTPUT_DIR=/path/to/output
+export SYNTHID_MAX_WORKERS=8
 ```
 
 ### Run Nano-150k Watermark Analysis
 
 ```bash
-# Full analysis on all 123k pairs (takes ~3 hours)
-python watermark_investigation/watermark_full_123k_analysis.py
+# Full analysis on all 123k pairs
+python watermark_investigation/watermark_full_123k_analysis.py \
+    pairs.jsonl \
+    --base-path /path/to/images \
+    --output results.json \
+    --max-pairs 1000  # Optional: limit for testing
 
 # Extract final watermark visualization
 python watermark_investigation/extract_final_watermark.py
 
-# Quick sample analysis (1000 pairs)
+# Quick sample analysis
 python watermark_investigation/watermark_full_analysis.py
 ```
 
 ### Detect SynthID Watermark
 
+**Single Image:**
 ```bash
 python src/extraction/synthid_codebook_extractor.py detect "path/to/image.png" \
     --codebook "artifacts/codebook/synthid_codebook.pkl"
 ```
 
+**Batch Detection:**
+```bash
+python src/extraction/synthid_codebook_extractor.py detect /path/to/images/ \
+    --batch \
+    --codebook "artifacts/codebook/synthid_codebook.pkl" \
+    --output results.json
+```
+
 **Output:**
 ```
-Detection Results:
-  Watermarked: True
-  Confidence: 1.0000
-  Correlation: 0.5355
-  Phase Match: 0.9571
-  Structure Ratio: 1.2753
+============================================================
+SynthID Watermark Detection Results
+============================================================
+Image:            path/to/image.png
+Watermarked:      YES
+Confidence:       0.9850
+Correlation:      0.5355 (threshold: 0.1790)
+Phase Match:      0.9571
+Structure Ratio:  1.2753 (expected: ~1.32)
+============================================================
 ```
 
 ### Extract New Codebook
 
 ```bash
+# Extract from images with parallel processing (4 workers)
 python src/extraction/synthid_codebook_extractor.py extract "data/pure_white/" \
-    --output "./my_codebook.pkl"
+    --output "./my_codebook.pkl" \
+    --max-images 250 \
+    --size 512
+
+# With custom config and logging
+python src/extraction/synthid_codebook_extractor.py extract "data/pure_white/" \
+    --output "./my_codebook.pkl" \
+    --config config.yaml \
+    --log-level DEBUG \
+    --log-file extraction.log
 ```
 
 ### Run Analysis
 
 ```bash
-# Comprehensive pattern discovery
-python src/analysis/synthid_codebook_finder.py
+# Comprehensive pattern discovery with parallel processing
+python src/analysis/synthid_codebook_finder.py "data/pure_white/" \
+    --output ./codebook_results \
+    --max-images 250 \
+    --workers 8
+
+# Without parallel processing (for debugging)
+python src/analysis/synthid_codebook_finder.py "data/pure_white/" \
+    --output ./codebook_results \
+    --no-parallel
 
 # Deep frequency analysis
 python src/analysis/deep_synthid_analysis.py
@@ -358,10 +430,39 @@ def detect_synthid(image, codebook):
     return is_watermarked, confidence
 ```
 
+## 🧪 Testing
+
+Run the test suite:
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=src --cov-report=html tests/
+
+# Run specific test file
+pytest tests/test_extraction.py -v
+
+# Run specific test
+pytest tests/test_utils.py::TestValidation::test_validate_codebook_valid -v
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+Areas for contribution:
+- GPU acceleration
+- Additional watermark detection methods
+- Performance optimizations
+- Documentation improvements
+- Bug reports and fixes
+
 ## 📚 References
 
 - [SynthID: Identifying AI-generated images](https://deepmind.google/technologies/synthid/)
-- [Arxiv Paper - SynthID-Image: Image watermarking at internet scale]([https://doi.org/10.1038/s41586-024-07754-z](https://arxiv.org/abs/2510.09263))
+- [Arxiv Paper - SynthID-Image: Image watermarking at internet scale](https://arxiv.org/abs/2510.09263)
 
 ## ⚠️ Disclaimer
 
