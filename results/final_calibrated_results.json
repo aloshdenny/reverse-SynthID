@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-04-10 14:04:15",
+  "calibrated_threshold": 0.7100000000000003,
+  "results": [
+    {
+      "set": "Watermarked (training set)",
+      "total": 88,
+      "detected": 79,
+      "expected": true,
+      "correct": 79,
+      "rate": 89.8,
+      "avg_conf": 0.7933,
+      "min_conf": 0.5508,
+      "max_conf": 0.9038
+    },
+    {
+      "set": "Best-cleaned (bypass)",
+      "total": 88,
+      "detected": 44,
+      "expected": false,
+      "correct": 44,
+      "rate": 50.0,
+      "avg_conf": 0.7047,
+      "min_conf": 0.4729,
+      "max_conf": 0.8867
+    },
+    {
+      "set": "Black reference (watermarked)",
+      "total": 20,
+      "detected": 20,
+      "expected": true,
+      "correct": 20,
+      "rate": 100.0,
+      "avg_conf": 0.8012,
+      "min_conf": 0.7437,
+      "max_conf": 0.8597
+    },
+    {
+      "set": "White reference (watermarked)",
+      "total": 20,
+      "detected": 16,
+      "expected": true,
+      "correct": 16,
+      "rate": 80.0,
+      "avg_conf": 0.7368,
+      "min_conf": 0.1481,
+      "max_conf": 0.8654
+    },
+    {
+      "set": "Synthetic clean (no watermark)",
+      "total": 22,
+      "detected": 16,
+      "expected": false,
+      "correct": 6,
+      "rate": 27.3,
+      "avg_conf": 0.7594,
+      "min_conf": 0.1647,
+      "max_conf": 1.0
+    }
+  ],
+  "overall_tpr": 89.8,
+  "overall_tnr": 45.5,
+  "overall_accuracy": 69.3
+}

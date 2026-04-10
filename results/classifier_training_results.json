@@ -1,0 +1,29 @@
+{
+  "best_model": "RandomForest",
+  "dataset_size": 1092,
+  "n_positive": 652,
+  "n_negative": 440,
+  "n_features": 14,
+  "feature_names": [
+    "confidence",
+    "phase_match",
+    "correlation",
+    "structure_ratio",
+    "carrier_strength",
+    "multi_scale_consistency",
+    "green_phase",
+    "ica_score",
+    "green_dominance",
+    "high_match_signal",
+    "corr_signal",
+    "phase_signal",
+    "green_phase_signal",
+    "struct_signal"
+  ],
+  "cv_results": {
+    "RandomForest": {
+      "mean_accuracy": 0.8407,
+      "mean_f1": 0.8666
+    }
+  }
+}

@@ -32,3 +32,9 @@ _temp_*
 _output_*
 push_randomly.sh
 synthid_bypass.py.final
+
+# Datasets
+gemini_*/
+test_clean_images/
+artifacts/codebook/*.pkl
+!artifacts/classifier/*.pkl
