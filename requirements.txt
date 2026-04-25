@@ -19,3 +19,7 @@ matplotlib>=3.4.0
 
 # Utilities
 tqdm>=4.60.0
+
+# API client
+python-dotenv>=1.0.0
+google-genai>=0.8.0
