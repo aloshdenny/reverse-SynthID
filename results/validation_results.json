@@ -1,0 +1,32 @@
+{
+  "black_images": {
+    "improved": {
+      "detected": 20,
+      "total": 20
+    },
+    "old": {
+      "detected": 15,
+      "total": 20
+    }
+  },
+  "white_images": {
+    "improved": {
+      "detected": 19,
+      "total": 20
+    },
+    "old": {
+      "detected": 12,
+      "total": 20
+    }
+  },
+  "clean_images": {
+    "improved": {
+      "false_positives": 20,
+      "total": 22
+    },
+    "old": {
+      "false_positives": 11,
+      "total": 22
+    }
+  }
+}
