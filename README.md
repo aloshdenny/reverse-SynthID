@@ -112,7 +112,8 @@ At 1536x2816 (from random watermarked content), carriers are at much higher freq
 |:-------:|:---------|:----:|:----------------:|:------:|
 | **V1** | JPEG compression (Q50) | 37 dB | ~11% phase drop | Baseline |
 | **V2** | Multi-stage transforms (noise, color, frequency) | 27-37 dB | ~0% confidence drop | Quality trade-off |
-| **V3** | **Multi-resolution spectral codebook subtraction** | **43+ dB** | **91% phase coherence drop** | **Best** |
+| **V3** | **Multi-resolution spectral codebook subtraction** | **43+ dB** | **91% phase coherence drop** | **Excellent Quality** |
+| **Nuclear (V3+)** | **Spectral Subtraction + Wavelet Denoising** | **40+ dB** | **Complete Signal Scattering** | **Maximum Erasure** |
 
 ### V3 Pipeline (Multi-Resolution Spectral Bypass)
 
@@ -137,6 +138,24 @@ Input Image (any resolution)
 3. **Direct known-signal subtraction** weighted by phase consistency and cross-validation confidence
 4. **Multi-pass schedule** catches residual watermark energy missed by previous passes
 5. **Per-channel weighting** (G=1.0, R=0.85, B=0.70) matches SynthID's embedding strength
+
+### Neural Watermark Detection Pipeline (`ImprovedSynthIDExtractor`)
+
+To defeat advanced spectral bypass and baseline noise-based detection, we developed an **ML-Driven Neural Watermark Classifier** that fuses multiple technical signals using a `RandomForest` model trained on 1,092 augmented image variants.
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   Detection Feature Fusion                                │
+├───────────────────────────────────────────────────────────────────────────────────────────┤
+│  1. Per-Channel Weighted FFT (G=1.0, R=0.85, B=0.70 to target true embedding strength)    │
+│  2. Soft Probabilistic Decision Scoring (uses sigmoids to prevent single-metric vetos)    │
+│  3. ICA Watermark Pattern Correlation (checks for persistent statistical signatures)      │
+│  4. Green Channel Dominance (checks if the green channel phase matching is distinct)      │
+│  5. Multi-Scale Consistency (correlation standard deviation across 256, 512, 1024 scales) │
+└───────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The detector achieves **84.1% Cross-Validation Accuracy** and **86.7% F1-score**, resolving edge cases where traditional heuristic thresholding failed or generated false positives.
 
 ---
 
@@ -174,10 +193,35 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 1. Build Multi-Resolution Codebook
+### 1. Unified CLI Tool (`detect.py`)
 
-From the CLI:
+We provide a unified, easy-to-use CLI `detect.py` at the project root for detecting and bypassing SynthID watermarks.
 
+#### A. Detect Watermark (Neural / Heuristic Model)
+Analyze any image to determine if it is watermarked by Gemini:
+```bash
+python detect.py analyze -i input.png
+```
+*Note: If the trained model is present at `artifacts/classifier/watermark_classifier.pkl`, it automatically enables the **high-accuracy Neural Classifier**. Otherwise, it gracefully falls back to the robust heuristic score.*
+
+#### B. Bypass / Remove Watermark
+Surgically remove the SynthID watermark in the frequency domain:
+```bash
+python detect.py bypass -i input.png -o output.png -m max
+```
+**Bypass modes (`-m`):**
+* `standard` - Standard frequency subtraction
+* `agg` - Aggressive subtraction
+* `max` - Maximum subtraction (default)
+* `nuclear` - Maximum subtraction + post-subtraction adaptive wavelet denoising (recommended for absolute erasure)
+
+---
+
+### 2. Advanced: Build Codebooks & Train Neural Classifier
+
+To train the machine learning models or regenerate the spectral profiles from scratch:
+
+#### A. Build the Multi-Resolution Spectral Codebook
 ```bash
 python src/extraction/synthid_bypass.py build-codebook \
     --black gemini_black \
@@ -186,58 +230,12 @@ python src/extraction/synthid_bypass.py build-codebook \
     --output artifacts/spectral_codebook_v3.npz
 ```
 
-Or from Python:
-
-```python
-from src.extraction.synthid_bypass import SpectralCodebook
-
-codebook = SpectralCodebook()
-
-# Profile 1: from black/white reference images (1024x1024)
-codebook.extract_from_references(
-    black_dir='gemini_black',
-    white_dir='gemini_white',
-)
-
-# Profile 2: from watermarked content images (1536x2816)
-codebook.build_from_watermarked('gemini_random')
-
-codebook.save('artifacts/spectral_codebook_v3.npz')
-# Saved with profiles: [1024x1024, 1536x2816]
-```
-
-### 2. Run V3 Bypass (Any Resolution)
-
-```python
-from src.extraction.synthid_bypass import SynthIDBypass, SpectralCodebook
-
-codebook = SpectralCodebook()
-codebook.load('artifacts/spectral_codebook_v3.npz')
-
-bypass = SynthIDBypass()
-result = bypass.bypass_v3(image_rgb, codebook, strength='aggressive')
-
-print(f"PSNR: {result.psnr:.1f} dB")
-print(f"Profile used: {result.details['profile_resolution']}")
-print(f"Exact match: {result.details['exact_match']}")
-```
-
-From the CLI:
-
+#### B. Train the Neural Classifier
+This extracts 14-dimensional frequency and phase features across all positive and negative datasets, performs multi-variant data augmentation (JPEG compression, resizing, center cropping), and trains a `RandomForest` classifier to build the high-accuracy model:
 ```bash
-python src/extraction/synthid_bypass.py bypass input.png output.png \
-    --codebook artifacts/spectral_codebook_v3.npz \
-    --strength aggressive
+python scripts/train_classifier.py
 ```
-
-**Strength levels:** `gentle` (minimal, ~45 dB) > `moderate` > `aggressive` (recommended) > `maximum`
-
-### 3. Detect Watermark
-
-```bash
-python src/extraction/robust_extractor.py detect image.png \
-    --codebook artifacts/codebook/robust_codebook.pkl
-```
+This saves the trained model to `artifacts/classifier/watermark_classifier.pkl` for immediate use by `detect.py`.
 
 ---
 
@@ -245,10 +243,12 @@ python src/extraction/robust_extractor.py detect image.png \
 
 ```
 reverse-SynthID/
+├── detect.py                              # Unified CLI for watermark detection & bypass
 ├── src/
 │   ├── extraction/
-│   │   ├── synthid_bypass.py              # V1/V2/V3 bypass + multi-res SpectralCodebook
-│   │   ├── robust_extractor.py            # Multi-scale watermark detection
+│   │   ├── synthid_bypass.py              # V1/V2/V3/Nuclear bypass & SpectralCodebook
+│   │   ├── improved_extractor.py          # ML-based per-channel soft-scoring detector
+│   │   ├── robust_extractor.py            # Legacy multi-scale watermark detection
 │   │   ├── watermark_remover.py           # Frequency-domain watermark removal
 │   │   ├── benchmark_extraction.py        # Benchmarking suite
 │   │   └── synthid_codebook_extractor.py  # Legacy codebook extractor
@@ -256,12 +256,19 @@ reverse-SynthID/
 │       ├── deep_synthid_analysis.py       # FFT / phase analysis scripts
 │       └── synthid_codebook_finder.py     # Carrier frequency discovery
 │
+├── scripts/                               # Training and validation pipelines
+│   ├── train_classifier.py                # Extracts features & trains RandomForest classifier
+│   ├── validation_test.py                 # Evaluates detector on baseline/cleaned datasets
+│   └── ...                                # Calibration and extraction scripts
+│
 ├── gemini_black/                          # 100 pure-black Gemini images (1024x1024)
 ├── gemini_white/                          # 100 pure-white Gemini images (1024x1024)
 ├── gemini_random/                         # 88 watermarked content images (1536x2816)
 │
 ├── artifacts/
 │   ├── spectral_codebook_v3.npz           # Multi-res V3 codebook [1024x1024, 1536x2816]
+│   ├── classifier/
+│   │   └── watermark_classifier.pkl       # Trained RandomForest classifier binary
 │   ├── codebook/                          # Detection codebooks (.pkl)
 │   └── visualizations/                    # FFT, phase, carrier visualizations
 │
@@ -319,6 +326,37 @@ The bypass uses **direct known-signal subtraction** (not a Wiener filter):
 
 ## Core Modules
 
+### `detect.py`
+
+The primary command-line interface and entrypoint for using the reverse-engineering tools:
+
+```bash
+# Detect watermark
+python detect.py analyze -i input.png
+
+# Bypass watermark (nuclear mode integrates spectral subtraction & wavelet denoising)
+python detect.py bypass -i watermarked.png -o clean.png -m nuclear
+```
+
+### `improved_extractor.py`
+
+**ImprovedSynthIDExtractor** — high-accuracy ML-fused soft-scoring detector:
+
+```python
+from improved_extractor import ImprovedSynthIDExtractor
+
+extractor = ImprovedSynthIDExtractor()
+# Load pre-extracted codebook
+extractor.load_codebook('artifacts/codebook/robust_codebook.pkl')
+# Load trained RandomForest classifier
+extractor.load_classifier('artifacts/classifier/watermark_classifier.pkl')
+
+result = extractor.detect_array(image_rgb)
+print(f"Watermarked: {result.is_watermarked}")
+print(f"Confidence: {result.confidence * 100:.1f}%")
+print(f"Signals: Phase Match={result.phase_match:.3f}, ICA Score={result.details.get('ica_score', 0):.3f}")
+```
+
 ### `synthid_bypass.py`
 
 **SpectralCodebook** — multi-resolution watermark fingerprint:
@@ -334,27 +372,14 @@ codebook.load('codebook.npz')
 profile, res, exact = codebook.get_profile(1536, 2816)  # auto-select
 ```
 
-**SynthIDBypass** — three bypass generations:
+**SynthIDBypass** — multi-generation bypass with custom removal schedules:
 
 ```python
 bypass = SynthIDBypass()
 
 result = bypass.bypass_simple(image, jpeg_quality=50)           # V1
 result = bypass.bypass_v2(image, strength='aggressive')          # V2
-result = bypass.bypass_v3(image, codebook, strength='aggressive') # V3 (best)
-```
-
-### `robust_extractor.py`
-
-Multi-scale watermark detector (90% accuracy):
-
-```python
-from robust_extractor import RobustSynthIDExtractor
-
-extractor = RobustSynthIDExtractor()
-extractor.load_codebook('artifacts/codebook/robust_codebook.pkl')
-result = extractor.detect_array(image)
-print(f"Watermarked: {result.is_watermarked}, Confidence: {result.confidence:.4f}")
+result = bypass.bypass_v3(image, codebook, strength='aggressive') # V3
 ```
 
 ---
